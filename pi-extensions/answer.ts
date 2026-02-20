@@ -12,7 +12,7 @@
 
 import { complete, type Model, type Api, type UserMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { BorderedLoader } from "@mariozechner/pi-coding-agent";
+import { BorderedLoader, SettingsManager } from "@mariozechner/pi-coding-agent";
 import {
 	type Component,
 	Editor,
@@ -70,8 +70,32 @@ Example output:
 const CODEX_MODEL_ID = "gpt-5.1-codex-mini";
 const HAIKU_MODEL_ID = "claude-haiku-4-5";
 
+function parseAnswerModel(value: unknown): { provider: string; modelId: string } | undefined {
+	if (typeof value !== "string") return undefined;
+	const raw = value.trim();
+	const slashIndex = raw.indexOf("/");
+	if (slashIndex <= 0 || slashIndex === raw.length - 1) return undefined;
+
+	const provider = raw.slice(0, slashIndex).trim();
+	const modelId = raw.slice(slashIndex + 1).trim();
+	if (!provider || !modelId) return undefined;
+	return { provider, modelId };
+}
+
+async function resolveAnswerModelFromSettings(cwd: string): Promise<{ provider: string; modelId: string } | undefined> {
+	try {
+		const settingsManager = SettingsManager.create(cwd);
+		const globalSettings = settingsManager.getGlobalSettings() as Record<string, unknown>;
+		const projectSettings = settingsManager.getProjectSettings() as Record<string, unknown>;
+		const answerModel = projectSettings.answerModel ?? globalSettings.answerModel;
+		return parseAnswerModel(answerModel);
+	} catch {
+		return undefined;
+	}
+}
+
 /**
- * Prefer Codex mini for extraction when available, otherwise fallback to haiku or the current model.
+ * Prefer configured model first, then Codex mini, then haiku, and finally the current model.
  */
 async function selectExtractionModel(
 	currentModel: Model<Api>,
@@ -79,7 +103,19 @@ async function selectExtractionModel(
 		find: (provider: string, modelId: string) => Model<Api> | undefined;
 		getApiKey: (model: Model<Api>) => Promise<string | undefined>;
 	},
+	cwd: string,
 ): Promise<Model<Api>> {
+	const configured = await resolveAnswerModelFromSettings(cwd);
+	if (configured) {
+		const configuredModel = modelRegistry.find(configured.provider, configured.modelId);
+		if (configuredModel) {
+			const apiKey = await modelRegistry.getApiKey(configuredModel);
+			if (apiKey) {
+				return configuredModel;
+			}
+		}
+	}
+
 	const codexModel = modelRegistry.find("openai-codex", CODEX_MODEL_ID);
 	if (codexModel) {
 		const apiKey = await modelRegistry.getApiKey(codexModel);
@@ -448,8 +484,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Select the best model for extraction (prefer Codex mini, then haiku)
-			const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry);
+			// Select the best model for extraction (prefer settings answerModel, then Codex mini, then haiku)
+			const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry, ctx.cwd);
 
 			// Run extraction with loader UI
 			const extractionResult = await ctx.ui.custom<ExtractionResult | null>((tui, theme, _kb, done) => {
