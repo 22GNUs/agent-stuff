@@ -137,6 +137,37 @@ async function selectExtractionModel(
 	return haikuModel;
 }
 
+type ExtractionOutcome =
+	| { status: "ok"; result: ExtractionResult }
+	| { status: "cancelled" }
+	| { status: "error"; message: string };
+
+function formatErrorMessage(error: unknown): string {
+	if (error instanceof Error) {
+		const message = error.message.trim();
+		return message.length > 0 ? message : error.name;
+	}
+	if (typeof error === "string") {
+		const message = error.trim();
+		return message.length > 0 ? message : "Unknown error";
+	}
+	return "Unknown error";
+}
+
+function compactTextForError(text: string, maxLength: number = 180): string {
+	const singleLine = text.replace(/\s+/g, " ").trim();
+	if (singleLine.length <= maxLength) return singleLine;
+	return singleLine.slice(0, maxLength - 3) + "...";
+}
+
+function createParseErrorMessage(responseText: string): string {
+	const preview = compactTextForError(responseText);
+	if (!preview) {
+		return "Model returned an empty response";
+	}
+	return `Model returned invalid JSON: ${preview}`;
+}
+
 /**
  * Parse the JSON response from the LLM
  */
@@ -488,11 +519,11 @@ export default function (pi: ExtensionAPI) {
 			const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry, ctx.cwd);
 
 			// Run extraction with loader UI
-			const extractionResult = await ctx.ui.custom<ExtractionResult | null>((tui, theme, _kb, done) => {
+			const extractionOutcome = await ctx.ui.custom<ExtractionOutcome>((tui, theme, _kb, done) => {
 				const loader = new BorderedLoader(tui, theme, `Extracting questions using ${extractionModel.id}...`);
-				loader.onAbort = () => done(null);
+				loader.onAbort = () => done({ status: "cancelled" });
 
-				const doExtract = async () => {
+				const doExtract = async (): Promise<ExtractionOutcome> => {
 					const apiKey = await ctx.modelRegistry.getApiKey(extractionModel);
 					const userMessage: UserMessage = {
 						role: "user",
@@ -507,7 +538,11 @@ export default function (pi: ExtensionAPI) {
 					);
 
 					if (response.stopReason === "aborted") {
-						return null;
+						return { status: "cancelled" };
+					}
+
+					if (response.stopReason !== "stop") {
+						return { status: "error", message: `Extraction stopped early (${response.stopReason})` };
 					}
 
 					const responseText = response.content
@@ -515,20 +550,32 @@ export default function (pi: ExtensionAPI) {
 						.map((c) => c.text)
 						.join("\n");
 
-					return parseExtractionResult(responseText);
+					const parsed = parseExtractionResult(responseText);
+					if (!parsed) {
+						return { status: "error", message: createParseErrorMessage(responseText) };
+					}
+
+					return { status: "ok", result: parsed };
 				};
 
 				doExtract()
 					.then(done)
-					.catch(() => done(null));
+					.catch((error) => done({ status: "error", message: `Failed to extract questions: ${formatErrorMessage(error)}` }));
 
 				return loader;
 			});
 
-			if (extractionResult === null) {
+			if (extractionOutcome.status === "cancelled") {
 				ctx.ui.notify("Cancelled", "info");
 				return;
 			}
+
+			if (extractionOutcome.status === "error") {
+				ctx.ui.notify(extractionOutcome.message, "error");
+				return;
+			}
+
+			const extractionResult = extractionOutcome.result;
 
 			if (extractionResult.questions.length === 0) {
 				ctx.ui.notify("No questions found in the last message", "info");
