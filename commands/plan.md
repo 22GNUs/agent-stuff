@@ -1,7 +1,9 @@
 ---
 description: Collaboratively plan a task before implementation
 ---
-I want to plan the following task before implementing anything: $@
+I want to plan the following task before implementing anything:
+
+> $@
 
 ## Planning Workflow
 
@@ -20,13 +22,15 @@ This is a **collaborative** phase. Do NOT write any plan file yet.
 edge cases, trade-offs. Present your questions naturally in your response so I can use `/answer`
 to respond efficiently. If you have many questions, group them by topic.
 
-After I answer, continue the conversation:
-- Share your understanding of the problem
-- Propose an approach with clear reasoning
-- Call out risks, alternatives, and open questions
-- If new uncertainties arise from my answers, **ask follow-up questions** — don't guess
+**This phase is a loop — repeat until all questions are resolved:**
 
-**Keep iterating** until I explicitly confirm the plan (e.g., "looks good", "approved", "go ahead").
+1. Ask your current open questions (or propose an approach if none remain)
+2. Wait for my answer
+3. Re-evaluate: did my answer introduce new uncertainties or leave anything still unclear?
+   - If yes → ask follow-up questions in the next round. Do NOT guess or assume.
+   - If no → summarize your understanding and proposed approach, then ask me to confirm
+
+Only exit this loop when I explicitly confirm the plan (e.g., "looks good", "approved", "go ahead").
 Do not assume silence or partial feedback means approval. If my feedback is ambiguous, ask to clarify.
 
 ### Phase 3: Persist
