@@ -37,7 +37,7 @@ interface ExtractionResult {
 
 const SYSTEM_PROMPT = `You are a question extractor. Given text from a conversation, extract any questions that need answering.
 
-Output a JSON object with this structure:
+Output ONLY a JSON object with this structure. Do not wrap it in markdown code fences or add any extra text:
 {
   "questions": [
     {
@@ -67,6 +67,8 @@ Example output:
   ]
 }`;
 
+const JSON_PREFILL = '{"questions":[';
+
 const CODEX_MODEL_ID = "gpt-5.1-codex-mini";
 const HAIKU_MODEL_ID = "claude-haiku-4-5";
 
@@ -92,6 +94,17 @@ async function resolveAnswerModelFromSettings(cwd: string): Promise<{ provider: 
 	} catch {
 		return undefined;
 	}
+}
+
+function appendAssistantJsonPrefill(payload: unknown, prefill: string): unknown | undefined {
+	if (!payload || typeof payload !== "object") return undefined;
+	const nextPayload = payload as { messages?: Array<{ role?: string; content?: unknown }> };
+	if (!Array.isArray(nextPayload.messages)) return undefined;
+
+	return {
+		...nextPayload,
+		messages: [...nextPayload.messages, { role: "assistant", content: prefill }],
+	};
 }
 
 /**
@@ -530,11 +543,23 @@ export default function (pi: ExtensionAPI) {
 						content: [{ type: "text", text: lastAssistantText! }],
 						timestamp: Date.now(),
 					};
+					let usedJsonPrefill = false;
 
 					const response = await complete(
 						extractionModel,
 						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-						{ apiKey, signal: loader.signal },
+						{
+							apiKey,
+							signal: loader.signal,
+							temperature: 0,
+							onPayload: (payload) => {
+								const nextPayload = appendAssistantJsonPrefill(payload, JSON_PREFILL);
+								if (nextPayload) {
+									usedJsonPrefill = true;
+								}
+								return nextPayload;
+							},
+						},
 					);
 
 					if (response.stopReason === "aborted") {
@@ -550,7 +575,9 @@ export default function (pi: ExtensionAPI) {
 						.map((c) => c.text)
 						.join("\n");
 
-					const parsed = parseExtractionResult(responseText);
+					const parsed =
+						parseExtractionResult(responseText) ??
+						(usedJsonPrefill ? parseExtractionResult(JSON_PREFILL + responseText) : null);
 					if (!parsed) {
 						return { status: "error", message: createParseErrorMessage(responseText) };
 					}
